@@ -1,0 +1,15 @@
+[package]
+name = "astroarch-updates"
+version = "0.1.0"
+edition = "2024"
+description = "Looks up, runs and tracks AstroArch version-migration scripts"
+
+[[bin]]
+name = "astroarch-updates"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
