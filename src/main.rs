@@ -28,15 +28,15 @@ enum Commands {
     /// completed successfully yet, in ascending version order. This is
     /// the single entry point `update-astroarch` should call.
     Update {
-        /// Directory containing versioned scripts (defaults to ~/.astroarch/scripts)
+        /// Directory containing versioned scripts (defaults to ~/.astroarch/scripts/migrations)
         #[arg(long)]
         scripts_dir: Option<PathBuf>,
     },
-    /// Look up scripts/<version>.sh and run it directly, recording the outcome.
+    /// Look up scripts/migrations/<version>.sh and run it directly, recording the outcome.
     Run {
-        /// The target AstroArch version (matches scripts/<version>.sh)
+        /// The target AstroArch version (matches scripts/migrations/<version>.sh)
         version: String,
-        /// Directory containing versioned scripts (defaults to ~/.astroarch/scripts)
+        /// Directory containing versioned scripts (defaults to ~/.astroarch/scripts/migrations)
         #[arg(long)]
         scripts_dir: Option<PathBuf>,
         /// Run even if this version already completed successfully before
@@ -74,7 +74,9 @@ fn main() -> Result<()> {
 
 fn default_scripts_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".astroarch").join("scripts"))
+    // Only the migrations: scripts/ also holds tools (create_ap.sh, resize_partition.sh...)
+    // that must never run as one
+    Ok(PathBuf::from(home).join(".astroarch").join("scripts").join("migrations"))
 }
 
 /// A migration script found on disk, named `<version>.sh`.
