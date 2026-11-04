@@ -33,7 +33,8 @@ been applied, running the pending scripts — lives here, not in `.zshrc`.
 astroarch-updates update [--scripts-dir DIR]
 ```
 
-- Lists `<scripts-dir>/*.sh` (default: `~/.astroarch/scripts`) and parses
+- Lists `<scripts-dir>/*.sh` (default: `~/.astroarch/scripts/migrations`, only the
+  migrations: `scripts/` also holds tools that must never run as one) and parses
   each file stem as a version, sorted numerically (so `2.9.0` sorts before
   `2.10.0`, unlike a plain string sort).
 - Skips any version that already has a successful execution recorded.
@@ -86,7 +87,7 @@ fi
 That whole block is replaced by a single call, after the `git pull`:
 
 ```sh
-astroarch-updates update --scripts-dir /home/$USER/.astroarch/scripts
+astroarch-updates update --scripts-dir /home/$USER/.astroarch/scripts/migrations
 if [[ $? -ne 0 ]]; then
     git reset --hard "$CURRENT_COMMIT"
     ...
