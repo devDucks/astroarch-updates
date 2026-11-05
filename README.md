@@ -59,6 +59,19 @@ Runs a single version's script directly, bypassing discovery. Mainly
 useful for manually re-applying or forcing a specific version.
 
 ```
+astroarch-updates check [--scripts-dir DIR] [--json]
+```
+
+Shows, without changing anything, the migrations that are not simply
+applied: `pending`, `retry` (the last run failed or was interrupted) or
+`changed` (applied, but the script was edited since). `--json` prints every
+version with its state, for programs such as the Control Center:
+
+```json
+{ "versions": [ { "version": "3.0.0", "state": "applied" } ] }
+```
+
+```
 astroarch-updates status [VERSION] [--limit N]
 ```
 

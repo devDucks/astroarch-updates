@@ -44,6 +44,17 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Show, without changing anything, the state of every migration script:
+    /// applied, pending, to retry (its last run failed or was interrupted),
+    /// or changed since it was applied.
+    Check {
+        /// Directory containing versioned scripts (defaults to ~/.astroarch/scripts/migrations)
+        #[arg(long)]
+        scripts_dir: Option<PathBuf>,
+        /// Print it as JSON, for programs (the Control Center's Update page)
+        #[arg(long)]
+        json: bool,
+    },
     /// Show past executions, most recent first.
     Status {
         /// Only show executions for this version
@@ -75,6 +86,7 @@ fn main() -> Result<()> {
             db::recover_interrupted(&conn)?;
             run(&conn, &version, scripts_dir, force)
         }
+        Commands::Check { scripts_dir, json } => check(&conn, scripts_dir, json),
         Commands::Status { version, limit } => show_status(&conn, version.as_deref(), limit),
     }
 }
@@ -163,6 +175,81 @@ fn update(conn: &rusqlite::Connection, scripts_dir: Option<PathBuf>) -> Result<(
         run_script(conn, &script.version.raw, &script.path)?;
     }
 
+    Ok(())
+}
+
+/// Where a migration script stands, for `check`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// Applied, and the script is the one that ran
+    Applied,
+    /// Never run
+    Pending,
+    /// Its last run failed or was interrupted: update runs it again
+    Retry,
+    /// Applied, but the script was edited since: update does not run it again
+    Changed,
+}
+
+impl State {
+    fn key(self) -> &'static str {
+        match self {
+            State::Applied => "applied",
+            State::Pending => "pending",
+            State::Retry => "retry",
+            State::Changed => "changed",
+        }
+    }
+}
+
+fn state_of(conn: &rusqlite::Connection, version: &str, path: &Path) -> Result<State> {
+    if let Some(applied) = db::last_success(conn, version)? {
+        let changed = match applied.script_sha256.as_deref() {
+            Some(old) => old != sha256_file(path)?,
+            None => false,
+        };
+        return Ok(if changed { State::Changed } else { State::Applied });
+    }
+    Ok(match db::latest(conn, version)? {
+        None => State::Pending,
+        Some(_) => State::Retry,
+    })
+}
+
+/// One line of `check --json`. The shape is the `versions` part of the
+/// report of the full update tool (Stéphane's astroarch-updates 0.5), so
+/// other parts (repository, packages) can be added beside it later.
+#[derive(serde::Serialize)]
+struct VersionInfo {
+    version: String,
+    /// applied | pending | retry | changed
+    state: &'static str,
+}
+
+#[derive(serde::Serialize)]
+struct Report {
+    versions: Vec<VersionInfo>,
+}
+
+fn check(conn: &rusqlite::Connection, scripts_dir: Option<PathBuf>, json: bool) -> Result<()> {
+    let scripts_dir = match scripts_dir {
+        Some(dir) => dir,
+        None => default_scripts_dir()?,
+    };
+    let mut versions = Vec::new();
+    for script in discover_scripts(&scripts_dir)? {
+        let state = state_of(conn, &script.version.raw, &script.path)?;
+        versions.push(VersionInfo { version: script.version.raw, state: state.key() });
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&Report { versions })?);
+        return Ok(());
+    }
+    let applied = versions.iter().filter(|v| v.state == "applied").count();
+    for v in versions.iter().filter(|v| v.state != "applied") {
+        println!("{:<12} {}", v.version, v.state);
+    }
+    println!("{applied} version(s) applied, in {}", scripts_dir.display());
     Ok(())
 }
 
@@ -315,6 +402,17 @@ mod tests {
         let rows = db::list_executions(&conn, Some("3.0.1"), 1).unwrap();
         assert_eq!(rows[0].status, "interrupted");
         assert!(db::last_success(&conn, "3.0.1").unwrap().is_none());
+
+        // check: each state (3.0.0.sh is the script that ran above)
+        std::fs::write(dir.join("3.1.0.sh"), "true\n").unwrap();
+        let state = |v: &str| state_of(&conn, v, &dir.join(format!("{v}.sh"))).unwrap();
+        assert_eq!(state("3.0.0"), State::Applied);
+        assert_eq!(state("3.1.0"), State::Pending);
+        std::fs::write(dir.join("3.0.1.sh"), "true\n").unwrap();
+        assert_eq!(state("3.0.1"), State::Retry); // interrupted above
+        std::fs::write(dir.join("3.0.0.sh"), "echo edited\n").unwrap();
+        assert_eq!(state("3.0.0"), State::Changed);
+        check(&conn, Some(dir.clone()), true).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -168,6 +168,24 @@ pub fn last_success(conn: &Connection, version: &str) -> Result<Option<Execution
     }
 }
 
+/// The latest run of VERSION, whatever its outcome (`missing` records left
+/// aside: a script absent then may exist now).
+pub fn latest(conn: &Connection, version: &str) -> Result<Option<Execution>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, version, script_path, status, exit_code, started_at, finished_at, duration_ms, script_sha256
+         FROM executions
+         WHERE version = ?1 AND status != 'missing'
+         ORDER BY id DESC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query([version])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row_to_execution(row)?))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn list_executions(conn: &Connection, version: Option<&str>, limit: u32) -> Result<Vec<Execution>> {
     let mut out = Vec::new();
     if let Some(version) = version {
