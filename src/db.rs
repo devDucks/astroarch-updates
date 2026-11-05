@@ -10,6 +10,8 @@ pub enum Status {
     Success,
     Failed,
     Missing,
+    /// The process died while the script was running
+    Interrupted,
 }
 
 impl Status {
@@ -19,6 +21,7 @@ impl Status {
             Status::Success => "success",
             Status::Failed => "failed",
             Status::Missing => "missing",
+            Status::Interrupted => "interrupted",
         }
     }
 }
@@ -81,6 +84,16 @@ pub fn open(db_path: &Path) -> Result<Connection> {
         conn.execute("ALTER TABLE executions ADD COLUMN script_sha256 TEXT", [])?;
     }
     Ok(conn)
+}
+
+/// Marks the runs left in `running` by a process that died as `interrupted`.
+/// Only for the commands that are about to run scripts: while `status` reads,
+/// another process may really be running one.
+pub fn recover_interrupted(conn: &Connection) -> Result<usize> {
+    Ok(conn.execute(
+        "UPDATE executions SET status = ?1 WHERE status = ?2",
+        (Status::Interrupted.as_str(), Status::Running.as_str()),
+    )?)
 }
 
 pub fn start_execution(

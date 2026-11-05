@@ -63,12 +63,18 @@ fn main() -> Result<()> {
     let conn = db::open(&db_path)?;
 
     match cli.command {
-        Commands::Update { scripts_dir } => update(&conn, scripts_dir),
+        Commands::Update { scripts_dir } => {
+            db::recover_interrupted(&conn)?;
+            update(&conn, scripts_dir)
+        }
         Commands::Run {
             version,
             scripts_dir,
             force,
-        } => run(&conn, &version, scripts_dir, force),
+        } => {
+            db::recover_interrupted(&conn)?;
+            run(&conn, &version, scripts_dir, force)
+        }
         Commands::Status { version, limit } => show_status(&conn, version.as_deref(), limit),
     }
 }
@@ -249,12 +255,12 @@ fn show_status(conn: &rusqlite::Connection, version: Option<&str>, limit: u32) -
         return Ok(());
     }
     println!(
-        "{:<5} {:<12} {:<9} {:<8} {:<25} {:<12} {}",
+        "{:<5} {:<12} {:<11} {:<8} {:<25} {:<12} {}",
         "id", "version", "status", "exit", "started_at", "duration_ms", "script_path"
     );
     for e in executions {
         println!(
-            "{:<5} {:<12} {:<9} {:<8} {:<25} {:<12} {}",
+            "{:<5} {:<12} {:<11} {:<8} {:<25} {:<12} {}",
             e.id,
             e.version,
             e.status,
@@ -302,6 +308,13 @@ mod tests {
         let new = db::last_success(&conn, "3.0.0").unwrap().unwrap();
         assert_eq!(new.script_sha256.as_deref(), Some(sha.as_str()));
         assert_eq!(sha.len(), 64);
+
+        // A run left in `running` by a dead process
+        db::start_execution(&conn, "3.0.1", "/x/3.0.1.sh", &sha).unwrap();
+        assert_eq!(db::recover_interrupted(&conn).unwrap(), 1);
+        let rows = db::list_executions(&conn, Some("3.0.1"), 1).unwrap();
+        assert_eq!(rows[0].status, "interrupted");
+        assert!(db::last_success(&conn, "3.0.1").unwrap().is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
