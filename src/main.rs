@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use sha2::{Digest, Sha256};
 
 use db::Status;
 use version::Version;
@@ -127,8 +128,21 @@ fn update(conn: &rusqlite::Connection, scripts_dir: Option<PathBuf>) -> Result<(
     let pending: Vec<_> = {
         let mut pending = Vec::new();
         for script in scripts {
-            if db::last_success(conn, &script.version.raw)?.is_none() {
-                pending.push(script);
+            match db::last_success(conn, &script.version.raw)? {
+                None => pending.push(script),
+                Some(prev) => {
+                    // Applied already: not run again, but say so if the script was
+                    // edited since (runs recorded before the checksums have none)
+                    if let Some(old) = prev.script_sha256.as_deref() {
+                        if old != sha256_file(&script.path)? {
+                            println!(
+                                "version {} changed since it was applied (execution #{}); \
+                                 it is not run again, use `run {} --force` to re-run it",
+                                script.version.raw, prev.id, script.version.raw
+                            );
+                        }
+                    }
+                }
             }
         }
         pending
@@ -181,7 +195,8 @@ fn run(
 /// script's exit code folded into the error if it failed.
 fn run_script(conn: &rusqlite::Connection, version: &str, script_path: &Path) -> Result<()> {
     let script_path_str = script_path.to_string_lossy().to_string();
-    let id = db::start_execution(conn, version, &script_path_str)?;
+    let sha256 = sha256_file(script_path)?;
+    let id = db::start_execution(conn, version, &script_path_str, &sha256)?;
     let started_at = executions_started_at(conn, id)?;
 
     println!("running {}", script_path.display());
@@ -210,6 +225,12 @@ fn run_script(conn: &rusqlite::Connection, version: &str, script_path: &Path) ->
 
     println!("version {version} applied successfully");
     Ok(())
+}
+
+/// SHA-256 of a script, to notice one that was edited after it was applied.
+fn sha256_file(path: &Path) -> Result<String> {
+    let bytes = std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn executions_started_at(conn: &rusqlite::Connection, id: i64) -> Result<String> {
@@ -244,4 +265,43 @@ fn show_status(conn: &rusqlite::Connection, version: Option<&str>, limit: u32) -
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checksum_is_recorded_and_old_databases_get_the_column() {
+        let dir = std::env::temp_dir().join(format!("astroarch-updates-sha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("astroarch.db");
+        // A database as 0.1.0 created it, with one run
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE executions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, version TEXT NOT NULL,
+                    script_path TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER,
+                    started_at TEXT NOT NULL, finished_at TEXT, duration_ms INTEGER);
+                 INSERT INTO executions (version, script_path, status, exit_code, started_at)
+                 VALUES ('2.0.9', '/x/2.0.9.sh', 'success', 0, '2026-11-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+        let conn = db::open(&db_path).unwrap();
+        let old = db::last_success(&conn, "2.0.9").unwrap().unwrap();
+        assert_eq!(old.script_sha256, None);
+
+        let script = dir.join("3.0.0.sh");
+        std::fs::write(&script, "true\n").unwrap();
+        let sha = sha256_file(&script).unwrap();
+        let id = db::start_execution(&conn, "3.0.0", "/x/3.0.0.sh", &sha).unwrap();
+        let started = executions_started_at(&conn, id).unwrap();
+        db::finish_execution(&conn, id, Status::Success, Some(0), &started).unwrap();
+        let new = db::last_success(&conn, "3.0.0").unwrap().unwrap();
+        assert_eq!(new.script_sha256.as_deref(), Some(sha.as_str()));
+        assert_eq!(sha.len(), 64);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
