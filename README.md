@@ -41,11 +41,15 @@ astroarch-updates update [--scripts-dir DIR]
 - Runs each remaining version in ascending order with `zsh`, stdin/stdout/
   stderr inherited so interactive steps (sudo prompts, `kdialog`,
   `notify-send`) behave exactly as before.
-- Records version, script path, status, exit code, start/finish time and
-  duration in SQLite for every attempt.
+- Records version, script path, status, exit code, start/finish time,
+  duration and the SHA-256 of the script in SQLite for every attempt.
+- A version applied before is not run again even if its script was edited
+  since: `update` says so, and `run <version> --force` runs it again.
 - Stops at the first failure and exits non-zero, so the caller (e.g. the
   zsh function) can still detect failure and roll back. Re-running `update`
   later retries the failed version before moving on to later ones.
+- A run whose process died (power cut, killed terminal) is marked
+  `interrupted` the next time `update` or `run` starts, and is retried too.
 
 ```
 astroarch-updates run <version> [--scripts-dir DIR] [--force]
